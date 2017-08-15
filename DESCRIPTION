@@ -1,0 +1,22 @@
+Package: keanu
+Type: Package
+Title: Enter the model.matrix
+Version: 0.1.0
+Authors@R: c(
+	person("Jacob", "Dink", email = "jwdink@strong.io", role = c("aut", "cre"))
+	)
+Maintainer@R: c(
+	person("Jacob", "Dink", email = "jwdink@strong.io", role = c("aut", "cre"))
+	)
+Description: Tools for formulas, model-matrices, and everything in between.
+License: MIT + file LICENCE
+Encoding: UTF-8
+LazyData: true
+Imports:
+  dplyr (>= 0.7.2),
+  purrr (>= 0.2.3),
+  tidyr (>= 0.6.3)
+RoxygenNote: 6.0.1
+Suggests: knitr,
+    rmarkdown
+VignetteBuilder: knitr

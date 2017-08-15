@@ -1,0 +1,85 @@
+---
+title: "Enter the Model.Matrix with the keanu package"
+author: "Jacob Dink"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Vignette Title}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r}
+library('dplyr')
+library('keanu')
+N <- 1000
+set.seed(32)
+df <- data_frame(x1 = rnorm(N, sd = .10),
+                 x2 = factor(sample(c("A","B","C"), size = N, replace = TRUE, prob = c(.6,.2,.2))),
+                 time_true = rlnorm(n = N, meanlog = x1+rnorm(N,sd=.01), sdlog = as.integer(x2)/5+.9+rnorm(N,sd=.01) ),
+                 start = rbeta(N,2,2)*10
+) %>%
+  tibble::rowid_to_column(var = 'id') %>%
+  mutate(time_true = round(time_true, digits=2) + .001,
+         end = pmin(start+time_true,10),
+         time = end-start,
+         event = as.numeric(start+time_true < 10) )
+
+library('ggplot2')
+ggplot(df, aes(x=start,
+               color = x2,
+               alpha=factor(event),
+               y=id, yend=id)) +
+  geom_segment(aes(xend = start+time_true)) +
+  geom_segment(aes(xend = end)) +
+  coord_cartesian(xlim=c(0,15)) +
+  scale_alpha_discrete(range = c(.33,.66)) +
+  geom_vline(xintercept = 10, linetype='dashed')
+
+library('survival')
+plot(survfit(formula = Surv(time, event) ~ x2, data = df),
+     col = c(2,3,4))
+
+three <- 3
+mc <- prepare_model_components(forms = list(meanlog = Surv(time, event=event) ~ x1 + x2,
+                                            sdlog = ~ x1 + x2) ,
+                               standardize_x = FALSE,
+                               data = df)
+
+ll <- function(df_dist_params, Y) {
+  event_lgl <- as.logical(Y[,2,drop=TRUE])
+  df_dist_params$time <- Y[,1,drop=TRUE]
+  out <- numeric(nrow(df_dist_params))
+  # observed events:
+  out[ event_lgl] <- with(df_dist_params[ event_lgl,],
+                         dlnorm(x = time, meanlog = meanlog, sdlog = sdlog, log = TRUE) )
+  # censored events:
+  out[!event_lgl] <- with(df_dist_params[!event_lgl,],
+                         plnorm(q = time, meanlog = meanlog, sdlog = sdlog, log.p = TRUE, lower.tail = FALSE) )
+  out
+}
+
+fit <- optim_from_mc(mc, log_likelihood_fun = ll, inv_link_funs = list(meanlog=identity, sdlog=exp))
+fit$res_trans
+
+tmp <- df %>%
+  group_by(x2) %>%
+  summarize(x1 = mean(x1)) %>%
+  ungroup() %>%
+  tidyr::crossing(time=unique(df$time))
+tmp[c('meanlog','sdlog')] <- as.data.frame(predict(fit, newdata = tmp))
+tmp$surv <- with(tmp, plnorm(q = time, meanlog = meanlog, sdlog = sdlog, lower.tail = FALSE))
+tmp <- split(tmp, tmp$x2)
+
+with(tmp[[1]], lines(x=time, y = surv, col=2))
+with(tmp[[2]], lines(x=time, y = surv, col=3))
+with(tmp[[3]], lines(x=time, y = surv, col=4))
+
+
+library('flexsurv')
+fit2 <- flexsurvreg(formula = Surv(time, event=event) ~ x1 + x2, 
+            anc = list(sdlog= ~ x1 + x2), dist = 'lognormal',
+            data=df)
+fit$res_trans
+fit2$res.t
+```
