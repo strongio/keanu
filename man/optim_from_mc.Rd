@@ -2,25 +2,28 @@
 % Please edit documentation in R/keanu-package.R
 \name{optim_from_mc}
 \alias{optim_from_mc}
-\title{Given the results of `prepare_model_components`, find coefficients which maximize the
-log-likelihood.}
+\title{Given the results of `prepare_model_components`, find coefficients}
 \usage{
-optim_from_mc(model_components, log_likelihood_fun, inits = NULL,
-  inv_link_funs = NULL, optim_args = list(method = "BFGS", control =
-  list(trace = as.integer(interactive()), maxit = 250)))
+optim_from_mc(model_components, error_fun, penalty_fun = function(x)
+  return(numeric(0)), inv_link_funs = NULL, inits = NULL,
+  optim_args = list(method = "BFGS", control = list(trace =
+  as.integer(interactive()), maxit = 250)))
 }
 \arguments{
 \item{model_components}{The results of `prepare_model_components`}
 
-\item{log_likelihood_fun}{A function which takes two arguments: (1) a data.frame where the
-columns are parameters of the distribution being predicted, and rows correspond to
-observations, and (2) the target variable being predicted.}
+\item{error_fun}{A function which takes two arguments: (1) a data.frame where the columns are
+parameters of the distribution being predicted, and rows correspond to observations, and (2)
+the target variable being predicted.}
 
-\item{inits}{Not yet supported.}
+\item{penalty_fun}{A function which takes a data.frame with parameter, term, beta, and returns a
+penalty.}
 
 \item{inv_link_funs}{A named list of inverse-link functions: i.e., functions that transform
 real-valued predictions into (potentially constrained) parameter-estimates. The list must be
 named for each parameter of the distribution. Defaults to the identity function for all.}
+
+\item{inits}{Not yet supported.}
 
 \item{optim_args}{A named list that will be passed as arguments to \code{stats::optim}.}
 }
@@ -28,6 +31,6 @@ named for each parameter of the distribution. Defaults to the identity function 
 An object of class 'keanu_model', with a predict method.
 }
 \description{
-Given the results of `prepare_model_components`, find coefficients which maximize the
-log-likelihood.
+Given the results of `prepare_model_components`, find coefficients which minimize some error
+function (or minimize negative log-liklihood), plus an optional penalty.
 }

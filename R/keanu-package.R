@@ -102,26 +102,31 @@ get_terms_mapping <- function(formula, data, ...) {
     names(from_mf_to_od) <- colnames(model_frame)
   }
 
+  from_od_to_mf <- flip_mapping(from_mf_to_od)
+  from_mf_to_tl <- flip_mapping(from_tl_to_mf)
+  from_mf_to_mm <- flip_mapping(from_mm_to_mf)
+  from_mf_to_tl <- flip_mapping(from_tl_to_mf)
+
   #
   list(
     original_data = list(
-      term_labels = purrr::map(flip_mapping(from_mf_to_od), ~purrr::flatten_chr(flip_mapping(from_tl_to_mf)[.x])),
-      model_frame = flip_mapping(from_mf_to_od),
+      term_labels = purrr::map(from_od_to_mf, ~purrr::flatten_chr(from_mf_to_tl[.x])),
+      model_frame = from_od_to_mf,
       model_matrix = flip_mapping(from_mm_to_od)
     ),
     term_labels = list(
       original_data = purrr::map(from_tl_to_mf, ~purrr::flatten_chr(from_mf_to_od[.x])),
       model_frame = from_tl_to_mf,
-      model_matrix = purrr::map(from_tl_to_mf, ~purrr::flatten_chr(flip_mapping(from_mm_to_mf)[.x]))
+      model_matrix = purrr::map(from_tl_to_mf, ~purrr::flatten_chr(from_mf_to_mm[.x]))
     ),
     model_frame = list(
       original_data = from_mf_to_od,
-      term_labels = flip_mapping(from_tl_to_mf),
-      model_matrix = flip_mapping(from_mm_to_mf)
+      term_labels = from_mf_to_tl,
+      model_matrix = from_mf_to_mm
     ),
     model_mat = list(
       original_data = from_mm_to_od,
-      term_labels = purrr::map(from_mm_to_mf, ~purrr::flatten_chr(flip_mapping(from_tl_to_mf)[.x])),
+      term_labels = purrr::map(from_mm_to_mf, ~purrr::flatten_chr(from_mf_to_tl[.x])),
       model_frame = from_mm_to_mf
     )
   )
@@ -158,6 +163,52 @@ na.warn <- function (object) {
             call. = FALSE, immediate. = TRUE)
   }
   stats::na.exclude(object)
+}
+
+#' Fit a keanu model
+#'
+#' @param forms A list of formulas, with names for each parameter/aspect of the target-variable
+#'   (e.g., 'mean' and 'sd' for a normally distributed variable where both of these parameters can
+#'   depend on covariates). The first formula should have a left-hand side, which specifies the
+#'   target-variable, as is typical for R modelling functions. The remaining formulas do not need
+#'   left-hand-sides.
+#' @param data A data.frame
+#' @param error_fun A function which takes two arguments: (1) a data.frame where the columns are
+#'   parameters of the distribution being predicted, and rows correspond to observations, and (2)
+#'   the target variable being predicted. It returns something to be minimized: e.g., the error, the
+#'   negative-log-likelihood.
+#' @param penalty_fun A function which takes a data.frame with parameter, term, beta, and returns a
+#'   penalty. This is added to the result of \code{error_fun}, so that they are minimized jointly.
+#' @param inv_link_funs A named list of inverse-link functions: i.e., functions that transform
+#'   real-valued predictions into (potentially constrained) parameter-estimates. The list must be
+#'   named for each parameter of the distribution. Defaults to the identity function for all.
+#' @param standardize_x Either a logical specifying whether to center/scale numeric predictors in
+#'   the model.frame, or a list with names 'center' and 'scale', each of which in turn are named
+#'   numeric vectors specifying centering/scaling. Note that terms that result in matrices (e.g.,
+#'   `stats::poly`) will not be scaled/centered, nor will factors.
+#' @param na.action A function specifying what to do with NAs. Defaults to \code{na.warn}.
+#' @param contrasts Passed to \code{model.matrix}.
+#' @param inits Not yet supported.
+#' @param optim_args A named list that will be passed as arguments to \code{stats::optim}.
+#'
+#' @return An object of class 'keanu_model', with predict method
+#' @export
+keanu_model <- function(
+  forms, data,
+
+  error_fun,
+  penalty_fun = function(x) return(numeric(0)),
+  inv_link_funs = NULL,
+
+  standardize_x = FALSE,
+  na.action = na.warn,
+  contrasts = NULL,
+
+  inits = NULL,
+  optim_args = list(method = "BFGS", control = list(trace=as.integer(interactive()),maxit=250)) ) {
+
+  mc <- prepare_model_components(forms = forms, data = data, standardize_x = standardize_x, na.action = na.action, contrasts = contrasts)
+  optim_from_mc(model_components = mc, error_fun = error_fun, penalty_fun = penalty_fun, inv_link_funs = inv_link_funs, inits = inits, optim_args = optim_args)
 }
 
 #' Prepare model-components
@@ -260,8 +311,8 @@ prepare_model_components <- function(forms, data,
                                     contrasts.arg = contrasts,
                                     model_frame = model_frame_std,
                                     terms_obj = terms_obj)
-  list_of_model_mats <- purrr::map(forms, function(this_form) {
-    this_terms <- terms(this_form)
+  list_of_terms <- purrr::map(forms, terms, data = data)
+  list_of_model_mats <- purrr::map(list_of_terms, function(this_terms) {
     needed_cols <- unique(purrr::flatten_chr(term_mapping$term_labels$model_matrix[attr(this_terms,'term.labels')]))
     if (attr(this_terms,'intercept')==1) needed_cols <- c("(Intercept)", needed_cols)
     model_matrix_merged_std[,needed_cols,drop=FALSE]
@@ -275,7 +326,7 @@ prepare_model_components <- function(forms, data,
               predvars = predvars,
               xlevels = xlevels,
               contrasts = contrasts,
-              forms = forms)
+              forms = purrr::map(list_of_terms, formula))
   class(out) <- c("model_components",class(out))
   out
 
@@ -340,30 +391,35 @@ initialize_df_pars <- function(list_of_model_mats) {
   nms <- purrr::map(list_of_model_mats, colnames)
   df_nested <- tibble::enframe(name = 'parameter', value = 'term', nms)
   df_unnested <- tidyr::unnest(df_nested)
-  df_unnested$beta <- 0
+  df_unnested$beta <- runif(n = nrow(df_unnested), min = -2, max = 2)
   df_unnested
 }
 
-#' Given the results of `prepare_model_components`, find coefficients which maximize the
-#' log-likelihood.
+#' Given the results of `prepare_model_components`, find coefficients
+#'
+#' Given the results of `prepare_model_components`, find coefficients which minimize some error
+#' function (or minimize negative log-liklihood), plus an optional penalty.
 #'
 #' @param model_components The results of `prepare_model_components`
-#' @param log_likelihood_fun A function which takes two arguments: (1) a data.frame where the
-#'   columns are parameters of the distribution being predicted, and rows correspond to
-#'   observations, and (2) the target variable being predicted.
-#' @param inits Not yet supported.
+#' @param error_fun A function which takes two arguments: (1) a data.frame where the columns are
+#'   parameters of the distribution being predicted, and rows correspond to observations, and (2)
+#'   the target variable being predicted.
+#' @param penalty_fun A function which takes a data.frame with parameter, term, beta, and returns a
+#'   penalty.
 #' @param inv_link_funs A named list of inverse-link functions: i.e., functions that transform
 #'   real-valued predictions into (potentially constrained) parameter-estimates. The list must be
 #'   named for each parameter of the distribution. Defaults to the identity function for all.
+#' @param inits Not yet supported.
 #' @param optim_args A named list that will be passed as arguments to \code{stats::optim}.
 #'
 #' @return An object of class 'keanu_model', with a predict method.
 #' @export
 optim_from_mc <- function(
   model_components,
-  log_likelihood_fun,
-  inits = NULL,
+  error_fun,
+  penalty_fun = function(x) return(numeric(0)),
   inv_link_funs = NULL,
+  inits = NULL,
   optim_args = list(method = "BFGS", control = list(trace=as.integer(interactive()),maxit=250)) ) {
 
   df_pars <- initialize_df_pars(model_components$list_of_model_mats)
@@ -371,18 +427,19 @@ optim_from_mc <- function(
     stop("Please report this error to the package maintainer.")
   par <- unroll_df_pars(df_pars)
 
-  neg_loglik_fun <- function(par, list_of_mm, Y) {
+  fun_to_minimize <- function(par, list_of_mm, Y, penalty_fun) {
     df_pars <- roll_df_pars(par)
     df_dist_params <- get_distribution_params(df_pars, list_of_mm, inv_link_funs = inv_link_funs)
-    - sum( log_likelihood_fun(df_dist_params, Y) )
+    sum( c( error_fun(df_dist_params, Y) , penalty_fun(df_pars) ) )
   }
 
   out <- list()
   optim_args$par <- par
-  optim_args$fn <- neg_loglik_fun
-  optim_args$hessian <- TRUE
+  optim_args$fn <- fun_to_minimize
+  if (!is.element('hessian', names(optim_args))) optim_args$hessian <- TRUE
   optim_args$list_of_mm <- quote(model_components$list_of_model_mats)
   optim_args$Y <- quote(model_components$response_object)
+  optim_args$penalty_fun <- penalty_fun
   out$optim <- do.call(optim,optim_args)
 
   ## collect results, add prior
@@ -399,19 +456,20 @@ optim_from_mc <- function(
     out$cov[replace_idx] <- solve(out$optim$hessian)
 
   } else {
-    warning(call. = FALSE,
-            "Optimisation has probably not converged - Hessian is not positive definite. ")
+    if (optim_args$hessian)
+      warning(call. = FALSE,
+              "Optimization has probably not converged - Hessian is not positive definite. ")
   }
   df_est <- roll_df_pars( out$optim$par )
   out$res_trans <-
     left_join(x = rename(.data = df_est , estimate = beta),
               y = rename(.data = roll_df_pars( sqrt(diag(out$cov)) ), se = beta) ,
               by = c('parameter','term'))
-  out$res_trans <- mutate(.data = out$res_trans,
-                          upper = .data$estimate + 1.96*se,
-                          lower = .data$estimate - 1.96*se)
+  out$res_trans <- mutate(.data = out$res_trans)
 
   out$model_components <- model_components
+  out$error_fun <- error_fun
+  out$penalty_fun <- penalty_fun
   out$inv_link_funs <- inv_link_funs
 
   class(out) <- c("keanu_model", class(out))
@@ -420,7 +478,7 @@ optim_from_mc <- function(
 }
 
 #' @export
-predict.keanu_model <- function(object, newdata, na.action = na.pass) {
+predict.keanu_model <- function(object, newdata, na.action = na.pass, ...) {
   mc <- prepare_model_components(forms = purrr::map(object$model_components$forms, remove_lhs),
                                  data = newdata,
                                  predvars = object$model_components$predvars,
@@ -433,5 +491,19 @@ predict.keanu_model <- function(object, newdata, na.action = na.pass) {
                                  list_of_model_mats = mc$list_of_model_mats,
                                  inv_link_funs = object$inv_link_funs)
   as.matrix(out)
+}
+
+#' @export
+summary.keanu_model <- function(object, conf = .95, ...) {
+  multi <- -qnorm((1-conf)/2)
+  df_print <- mutate(.data = object$res_trans,
+                     lower = .data$estimate - multi*se,
+                     upper = .data$estimate + multi*se)
+  df_print
+}
+
+#' @export
+print.keanu_model <- function(x, ...) {
+  print(x$res_trans, n=Inf)
 }
 

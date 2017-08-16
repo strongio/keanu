@@ -9,44 +9,162 @@ vignette: >
   %\VignetteEncoding{UTF-8}
 ---
 
-```{r}
+```{r setup}
 library('dplyr')
+library('ggplot2')
+library('tidyr')
+library('tibble')
+library('stringr')
 library('keanu')
+theme_set(theme_bw())
+```
+
+One of R's strengths is its easy formula-based interface to modelling. You don't have to worry about manually one-hot-encoding categorical variables, explicitly adding columns for higher-level interaction terms, or re-running entire models just to drop a single term. Instead, formulas automatically do the work, transforming symbolic specifications of models into the raw numerical matrices that are used under the hood to fit your models. 
+
+Now let's say you want to build your own model-fitting function. Perhaps you're writing your own package for a novel type of model; or maybe you just want to experiment and iterate quickly. One option is to hand-code the underlying model-fitting, perhaps using numerical optimization (e.g., `stats::optim`), or maybe a language like Stan. The downside to this is you're no longer taking advantage of that handy formula interface. If you plan on using your model more than once -- perhaps trying out different version, or experimenting with different datasets -- this lack of an easy interface is bound to slow you down.
+
+Keanu is a package that's designed to help in situations like these. It gives you the core functionality for a model-building function: i.e., a function that takes formula(s), parses these into a model-matrix, estimates coefficients, and returns an object ready for prediction and iterative tweaking.
+
+This vignette walks through some examples of how you might use keanu for different modelling applications.
+
+## Example 1: Fitting Additional Parameters in a GLM
+
+### Data that Violates Assumptions
+
+In this first example, will fit a pretty straightforward generalized-linear-model, with a twist.
+
+First, let's simulate some data:
+
+```{r Ex1 Simulate Data}
 N <- 1000
-set.seed(32)
-df <- data_frame(x1 = rnorm(N, sd = .10),
-                 x2 = factor(sample(c("A","B","C"), size = N, replace = TRUE, prob = c(.6,.2,.2))),
-                 time_true = rlnorm(n = N, meanlog = x1+rnorm(N,sd=.01), sdlog = as.integer(x2)/5+.9+rnorm(N,sd=.01) ),
-                 start = rbeta(N,2,2)*10
+set.seed(42)
+df1 <- data_frame(x1 = runif(N, -1, 1),
+                  mean_true = x1 + rnorm(N,sd=.25),
+                  sd_true = exp( x1 + rnorm(N,sd=.25) ), 
+                  y = rnorm(N, mean = mean_true, sd = sd_true )
 ) %>%
-  tibble::rowid_to_column(var = 'id') %>%
+  rowid_to_column(var = 'id') 
+
+ggplot(df1, aes(x=x1, y=y)) +
+  geom_point(alpha=.50) +
+  stat_smooth()
+```
+
+We can see these data violate the 'homeoskedacity' assumption for linear models: i.e., the assumption that the variance is constant in our data. The scale-location plot here confirms it:
+
+```{r}
+fit_lm <- lm(y ~ x1, data = df1)
+plot(fit_lm, which=3)
+```
+
+The problem a traditional linear model faces with this data is that it assumes your data can be described with the following equation:
+
+$$
+Y=\beta_0+\beta_1X+\varepsilon  \\
+\text{where } \varepsilon\sim\mathcal N(0, \sigma^2_\varepsilon)
+$$
+
+In this equation, $\sigma^2$ doesn't depend on our coefficients, $\beta_1$. 
+
+So it seems like a simple solution would be to fit a model in which $\sigma^2$ *can* vary with our coefficients. In the next section, we'll learn how we can do this with keanu.
+
+### Using Keanu to model extra Parameters
+
+To build a model with keanu, we typically want to think through a few steps: (1) which components of our target-variable can be predicted by which predictors? (2) how should these predictors be linked to the target-variable? (3) what makes prediction "good"?
+
+First, we specify which components of our target variable can be predicted with which predictors. To turn this into code, we give keanu a named list of formulae. The names in this list are the components of the target-variable we want to predict: for example, the mean and the standard-deviation. The first formula we pass will also include the target variable on the left-hand-side.
+
+```{r}
+the_forms <- list(mean = y ~ x1, sd = ~ x1)
+```
+
+Next, let's think more about the link. The standard-deviation of the normal distribution needs to be greater than zero; but x1 has negative values. So for that parameter, we should apply a function to the results of the right-hand-side of the formula that constrains it to be positive. A natural solution is the exponential function. This is called an *inverse link function*, and the link function in this case would be the natural logarithm.
+
+```{r}
+ilink_funs <- list(mean=identity, sd=exp)
+```
+
+Finally, let's think about how to define a "good" and a "bad" prediction. That is, if we get a particular mean and standard-deviation, how do we know whether these are appropriate parameter-estimates, given our target-variable? This is typically given by the "likelihood": a function that tells us how probable the observed target-variable values are, given the parameters. Typically, we use the log-likelihood, to avoid numerical underflow. A good choice of `mean`, `sd` will be on that maximizes the (log)-likelihood. 
+
+In keanu, you specify an 'error' function: a function that says how "bad" a prediction is, rather than how good it is. So we pass a function that gives the negative log-likelihood. This function takes two arguments: (1) a data-frame, where the first column is the predicted mean for each observation, the second column is the predicted standard-deviation for each observation, and (2) the target-variable (y). 
+
+```{r}
+neg_ll1 <- function(df_dist_params, Y) {
+  - with(df_dist_params, 
+         dnorm(x = Y, mean = mean, sd = sd, log = TRUE) )
+}
+```
+
+Now that we have these components, we pass them to the `keanu_model` function. This function parses the formulas, and finds coefficients for the terms in these formulas, such that the error-function is minimized.
+
+```{r}
+fit1 <- keanu_model(forms = the_forms, 
+                    data = df1, 
+                    error_fun = neg_ll1, 
+                    inv_link_funs = ilink_funs )
+fit1
+ggplot(summary(fit1), aes(x=term, y=estimate)) +
+  geom_pointrange(aes(ymin=lower, ymax=upper)) +
+  facet_wrap(~parameter, labeller='label_both') +
+  geom_hline(yintercept = 0, linetype='dashed') +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+And there you have it: we have fit a model that accounts for not only the change in the mean of the normal distribution, but also its change in variance.
+
+## Example 2: Survival Analysis
+
+In the next example, we'll show how to fit a "survival" model: a model designed to predict the time until some event, when this event has not occurred for everyone in our dataset. For example, imagine we are modelling customer-churn: some customers have cancelled their subscription, but for others, we know only that their subscription is **at least** X-months long, but we don't know how long it will ultimately end up being. Survival-analysis uses a modified likelihood function to take advantage of this type of partially observed (also called "right-censored") data. Below we'll show how we can use the flexibility of keanu to fit this kind of data.
+
+```{r}
+set.seed(32)
+df2 <- data_frame(x1 = rnorm(N, sd = .10),
+                  x2 = factor(sample(c("A","B","C"), size = N, replace = TRUE, prob = c(.6,.2,.2))),
+                  time_true = rlnorm(n = N,
+                                     meanlog = x1+rnorm(N,sd=.01), 
+                                     sdlog = as.integer(x2)/5+.9+rnorm(N,sd=.01) ),
+                  start = rbeta(N,3,2)*10
+) %>%
+  rowid_to_column(var = 'id') %>%
   mutate(time_true = round(time_true, digits=2) + .001,
          end = pmin(start+time_true,10),
          time = end-start,
          event = as.numeric(start+time_true < 10) )
 
-library('ggplot2')
-ggplot(df, aes(x=start,
-               color = x2,
-               alpha=factor(event),
-               y=id, yend=id)) +
+ggplot(df2, aes(x=start,
+                color = x2,
+                alpha=factor(event),
+                y=id, yend=id)) +
   geom_segment(aes(xend = start+time_true)) +
   geom_segment(aes(xend = end)) +
   coord_cartesian(xlim=c(0,15)) +
-  scale_alpha_discrete(range = c(.33,.66)) +
-  geom_vline(xintercept = 10, linetype='dashed')
+  scale_alpha_discrete(range = c(.33,.66), guide=FALSE) +
+  geom_vline(xintercept = 10, linetype='dashed') +
+  xlab("Time") +
+  theme(legend.position = 'bottom') 
+```
 
+Our dataset consists of 1000 observations, each of which is either (a) the time until an event occurred, or (b) the last time observed. Let's stick with the customer-churn example. In the plot above, each customer is a line, with their cancellation being the end of the line. The dashed divider shows the current date, beyond which we don't observe events; so for the lines that cross this divider, we don't get to see their true length, we only get a lower-bound on this length.
+
+Another way of plotting this data is with a "Kaplan-Meier" estimate of the survival-function: i.e., the cumulative probability of "surviving" to a given timepoint. We can see that predictor x2 changes the shape of the survival curve.
+
+```{r}
 library('survival')
-plot(survfit(formula = Surv(time, event) ~ x2, data = df),
-     col = c(2,3,4))
+library('broom')
+df_survfit_tidy <- tidy(survfit(formula = Surv(time, event) ~ x2, data = df2)) %>%
+  mutate(x2 = str_match(pattern = "x2=(.)", strata)[,2])
+surv_plot <- ggplot(df_survfit_tidy, aes(x=time, y=estimate, group = x2, color = x2)) +
+  geom_step() +
+  geom_ribbon(aes(ymin=conf.low, ymax=conf.high), color=NA, alpha=.20) 
+print(surv_plot + theme(legend.position = 'bottom'))
+```
 
-three <- 3
-mc <- prepare_model_components(forms = list(meanlog = Surv(time, event=event) ~ x1 + x2,
-                                            sdlog = ~ x1 + x2) ,
-                               standardize_x = FALSE,
-                               data = df)
+Time-to-event data isn't well-captured by a normal distribution, like in our first example: it can't be zero, and is usually highly skewed. Instead, we'll use the lognormal distribution.
 
-ll <- function(df_dist_params, Y) {
+The key insight in survival-analysis is that, while observed data gets a typical likelihood function (here, the density of the lognormal distribution) right-censored data gets a special liklihood function-- namely, the survivor-function. The intuition is that, for observed events, the likelihood should be high for parameters that put probability-mass above these events; while for right-censored data, the likelihood should be high for parameters that push probability-mass ahead of the censoring-point (since the event occurs in the future).
+
+```{r}
+neg_ll2 <- function(df_dist_params, Y) {
   event_lgl <- as.logical(Y[,2,drop=TRUE])
   df_dist_params$time <- Y[,1,drop=TRUE]
   out <- numeric(nrow(df_dist_params))
@@ -56,30 +174,46 @@ ll <- function(df_dist_params, Y) {
   # censored events:
   out[!event_lgl] <- with(df_dist_params[!event_lgl,],
                          plnorm(q = time, meanlog = meanlog, sdlog = sdlog, log.p = TRUE, lower.tail = FALSE) )
-  out
+  -out
 }
-
-fit <- optim_from_mc(mc, log_likelihood_fun = ll, inv_link_funs = list(meanlog=identity, sdlog=exp))
-fit$res_trans
-
-tmp <- df %>%
-  group_by(x2) %>%
-  summarize(x1 = mean(x1)) %>%
-  ungroup() %>%
-  tidyr::crossing(time=unique(df$time))
-tmp[c('meanlog','sdlog')] <- as.data.frame(predict(fit, newdata = tmp))
-tmp$surv <- with(tmp, plnorm(q = time, meanlog = meanlog, sdlog = sdlog, lower.tail = FALSE))
-tmp <- split(tmp, tmp$x2)
-
-with(tmp[[1]], lines(x=time, y = surv, col=2))
-with(tmp[[2]], lines(x=time, y = surv, col=3))
-with(tmp[[3]], lines(x=time, y = surv, col=4))
-
-
-library('flexsurv')
-fit2 <- flexsurvreg(formula = Surv(time, event=event) ~ x1 + x2, 
-            anc = list(sdlog= ~ x1 + x2), dist = 'lognormal',
-            data=df)
-fit$res_trans
-fit2$res.t
 ```
+
+Equipped with our special likelihood, we're ready to fit our survival model with keanu.
+
+```{r}
+fit2 <- keanu_model(forms = list(meanlog = Surv(time, event=event) ~ x1 + x2,
+                                 sdlog =                           ~ x1 + x2),
+                    data = df2,
+                    error_fun = neg_ll2, 
+                    inv_link_funs = list(meanlog=identity, sdlog=exp))
+fit2
+ggplot(summary(fit2), aes(x=term, y=estimate)) +
+  geom_pointrange(aes(ymin=lower, ymax=upper)) +
+  facet_wrap(~parameter, labeller='label_both') +
+  geom_hline(yintercept = 0, linetype='dashed') +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+The `keanu_model` function returns an object with a "predict" method. This returns a matrix, where each column is a predicted component of the target variable:
+
+```{r}
+predict(fit2, newdata = head(df2))
+```
+
+Let's take advantage of this predict function, and add fitted curves to our survival-plot from before:
+
+```{r}
+df_survfit_tidy <- left_join(x = df_survfit_tidy,
+                             y = df2 %>% group_by(x2) %>% summarize(x1 = mean(x1)) %>% ungroup() 
+)
+df_survfit_tidy[c('meanlog','sdlog')] <- as.data.frame(predict(fit2, newdata = df_survfit_tidy))
+df_survfit_tidy$predicted <- with(df_survfit_tidy, 
+                                  plnorm(q = time, meanlog = meanlog, sdlog = sdlog, lower.tail = FALSE))
+
+surv_plot +
+  geom_line(data = df_survfit_tidy, aes(y=predicted), 
+            alpha=.75, size=1.1, linetype='dashed') +
+  facet_wrap(~x2, ncol=1) 
+```
+
+It looks like our model is a pretty good fit!
