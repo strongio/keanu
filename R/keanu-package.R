@@ -17,6 +17,17 @@
 NULL
 #> NULL
 
+#' Parse a character into an expression
+#'
+#' @param x A character
+#'
+#' @return An expression
+#' @export
+parse_char <- function(x) {
+  stopifnot(is.character(x))
+  parse(text = x)[[1]]
+}
+
 #' Remove the LHS of a formula
 #'
 #' @param x A formula
