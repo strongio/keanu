@@ -77,9 +77,13 @@ get_terms_mapping <- function(formula, data, ...) {
                              the_dots) )
 
   if (ncol(model_frame)==0) {
-    # check for intercept?
-    from_mm_to_od <- from_od_to_mm <- from_mf_to_od <- list()
-    stop(call. = FALSE, "Please report this error to the package maintainer.")
+    if (attr(terms_obj,'intercept')==1) mm_entry <- list(`Intercept`=NULL)
+    else mm_entry <- NULL
+    out <- list(original_data = list(term_labels=NULL, model_frame=NULL, model_matrix=NULL),
+         model_frame = list(term_labels=NULL, original_data=NULL, model_matrix=NULL),
+         term_labels = list(original_data=NULL, model_frame=NULL, model_matrix=NULL),
+         model_matrix = list(term_labels=mm_entry, model_frame=mm_entry, original_data=mm_entry))
+    return(out)
   } else {
     # for each column in the model.matrix, get corresponding model.frame col(s):
     cols_in_mm <- colnames(model_matrix)
@@ -324,7 +328,9 @@ prepare_model_components <- function(forms, data,
                                     terms_obj = terms_obj)
   list_of_terms <- purrr::map(forms, terms, data = data)
   list_of_model_mats <- purrr::map(list_of_terms, function(this_terms) {
-    needed_cols <- unique(purrr::flatten_chr(term_mapping$term_labels$model_matrix[attr(this_terms,'term.labels')]))
+    this_term_map <- term_mapping$term_labels$model_matrix
+    if (length(this_term_map)>0) needed_cols <- unique(purrr::flatten_chr(this_term_map[attr(this_terms,'term.labels')]))
+    else needed_cols <- c()
     if (attr(this_terms,'intercept')==1) needed_cols <- c("(Intercept)", needed_cols)
     model_matrix_merged_std[,needed_cols,drop=FALSE]
   })
