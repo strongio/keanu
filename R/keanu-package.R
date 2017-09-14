@@ -152,14 +152,39 @@ get_terms_mapping <- function(formula, data, ...) {
 #'
 #' @param forms List of formulae/formulas
 #' @param data Data.frame
+#' @param include_response_on_rhs Defaults to FALSE. Should response terms be moved to the right-hand side, so that the model-frame for the merged formula includes them in (e.g.) NA-based row-deletion? If
 #'
 #' @return Single formula, with \code{environment(forms[[1]])}
-merge_formulae <- function(forms, data) {
+merge_formulae <- function(forms, data, include_response_on_rhs = FALSE) {
+
+  ## check for response:
+  has_response_lgl <- purrr::map_int(forms, length)==3L
+  if (include_response_on_rhs) {
+    if (any(has_response_lgl))
+      forms$.response <- merge_formulae(rlang::quos(!!!purrr::map(forms[which(has_response_lgl)], ~.x[[2]])), data=data)
+  } else {
+    if (any(has_response_lgl[-1]))
+      warning(call. = FALSE, "`forms` list includes LHS terms after first element; these will be removed.")
+  }
+
+  ## get all term-labels, convert to formula:
   list_of_term_labels <- purrr::map(purrr::map(forms, terms, data=data), attr, 'term.labels')
   term_labels_unique <- unique(purrr::flatten_chr(list_of_term_labels))
   if (length(term_labels_unique)>0) form_out <- stats::reformulate(term_labels_unique)
   else form_out <- ~1
-  lazyeval::f_lhs(form_out) <- lazyeval::f_lhs(forms[[1]])
+
+  ## if response was moved to rhs, add attribute for removing/selecting it:
+  if (include_response_on_rhs) {
+    attr(form_out,'response_idx_in_terms') <- which(attr(terms(form_out, data=data), 'term.labels') %in% list_of_term_labels$.response)
+    tm <- get_terms_mapping(form_out, data)
+    attr(form_out,"response_cols_in_model_frame") <-
+      purrr::flatten_chr(tm$term_labels$model_frame[list_of_term_labels$.response])
+    attr(form_out,'response_remover') <- paste0("~ .",paste0("-", list_of_term_labels$.response, collapse=""))
+    attr(form_out,'response_remover') <- as.formula(attr(form_out,'response_remover'), env = environment(forms[[1]]))
+  } else {
+    ## otherwise, first formula's lhs is used
+    lazyeval::f_lhs(form_out) <- lazyeval::f_lhs(forms[[1]])
+  }
   environment(form_out) <- environment(forms[[1]])
   form_out
 }
@@ -250,31 +275,43 @@ prepare_model_components <- function(forms, data,
                                      xlev = NULL,
                                      drop.unused.levels = FALSE) {
 
-  formula_merged <- merge_formulae(forms, data)
-  terms_merged <- terms(formula_merged)
+  formula_with_response <- merge_formulae(forms, data, include_response_on_rhs = TRUE)
+  response_idx <- attr(formula_with_response,'response_idx_in_terms')
+  terms_with_response <- terms(formula_with_response)
   if (!is.null(predvars)) {
     if (is.character(predvars)) predvars <- parse(text = predvars)[[1]]
-    if (length(formula_merged)==2)
-      predvars <- predvars[-2] # if no response in formula, remove response from predvars
-    attr(terms_merged,'predvars') <- predvars
+    # if they supplied predvars from a previous call, these wont have response-terms
+    # if those response-terms were in the forms, we want to add them back
+    if (!is.null(response_idx))
+      predvars[length(predvars)+seq_along(response_idx)] <- attr(terms_with_response,'variables')[response_idx+1]
+    attr(terms_with_response,'predvars') <- predvars
   }
-  model_frame_merged <-
-    model.frame(terms_merged, data = data, na.action = na.action,
+  model_frame_with_response <-
+    model.frame(terms_with_response, data = data, na.action = na.action,
                 drop.unused.levels = drop.unused.levels, xlev = xlev)
-  xlevels <- .getXlevels(attr(model_frame_merged, "terms"), model_frame_merged)
-  if (length(xlevels)==0) xlevels <- NULL
+  if (is.null(predvars)) {
+    # we just computed predvars. let's remember them for future calls, but
+    # don't remember response-terms, because they might not be present in
+    # future calls (e.g., if youre predicting you dont need the response)
+    predvars <- attr(attr(model_frame_with_response,'terms'), 'predvars')
+    if (!is.null(response_idx)) predvars <- predvars[-(response_idx+1)]
+  }
 
   # separate out response object: --
-  response_idx <- attr(terms_merged,'response')
-  terms_full <- terms(model_frame_merged)
-  if (response_idx!=0) {
-    response_object <- model_frame_merged[[response_idx]]
-    model_frame_merged <- model_frame_merged[,-response_idx,drop=FALSE]
-    attr(model_frame_merged,'terms') <- delete.response(terms_full)
+  formula_merged <- update(formula_with_response, attr(formula_with_response,"response_remover"))
+  response_cols_in_mf <- attr(formula_with_response,"response_cols_in_model_frame")
+  if (!is.null(response_cols_in_mf)) {
+    response_object <- model_frame_with_response[,response_cols_in_mf,drop=TRUE]
+    reponse_mf_idx <- which(colnames(model_frame_with_response) == response_cols_in_mf)
+    model_frame_merged <- model_frame_with_response[,-reponse_mf_idx,drop=FALSE]
+    attr(model_frame_merged,'terms') <- terms(formula_merged, data = data)
+    attr(attr(model_frame_merged,'terms'),'predvars') <- predvars
+    attr(attr(model_frame_merged,'terms'),'dataClasses') <- attr(terms(model_frame_with_response),'dataClasses')[-response_idx]
   } else {
     response_object <- NULL
   }
-  if (is.null(predvars)) predvars <- attr(terms_full,'predvars')
+  xlevels <- .getXlevels(attr(model_frame_merged, "terms"), model_frame_merged)
+  if (length(xlevels)==0) xlevels <- NULL
 
   ## standardize model-frame: --
   mf_is_numeric_lgl <- purrr::map_lgl(model_frame_merged, is.numeric) & !purrr::map_lgl(model_frame_merged, is.matrix)
