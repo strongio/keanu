@@ -148,6 +148,21 @@ get_terms_mapping <- function(formula, data, ...) {
 
 }
 
+response_to_rhs <- function(formula) {
+  resp <- formula[[2]]
+  # when parentheses are used on the LHS, interpreted differently than on RHS.
+  # need to wrap in a temp-function that'll be stripped off later
+  if (!is.symbol(resp) && resp[[1]] == "(")
+    resp[[1]] <- quote(.response)
+  out <- as.formula(unclass(quo(!!resp)))
+  environment(out) <- environment(formula)
+  out
+}
+
+.response <- function(x) {
+  return(x)
+}
+
 #' Merge a list of formulae
 #'
 #' @param forms List of formulae/formulas
@@ -161,7 +176,8 @@ merge_formulae <- function(forms, data, include_response_on_rhs = FALSE) {
   has_response_lgl <- purrr::map_int(forms, length)==3L
   if (include_response_on_rhs) {
     if (any(has_response_lgl))
-      forms$.response <- merge_formulae(rlang::quos(!!!purrr::map(forms[which(has_response_lgl)], ~.x[[2]])), data=data)
+      forms$.response <- merge_formulae(forms = purrr::map(forms[which(has_response_lgl)], response_to_rhs) ,
+                                        data=data)
   } else {
     if (any(has_response_lgl[-1]))
       warning(call. = FALSE, "`forms` list includes LHS terms after first element; these will be removed.")
@@ -302,7 +318,9 @@ prepare_model_components <- function(forms, data,
   response_cols_in_mf <- attr(formula_with_response,"response_cols_in_model_frame")
   if (!is.null(response_cols_in_mf)) {
     response_object <- model_frame_with_response[,response_cols_in_mf,drop=TRUE]
-    reponse_mf_idx <- which(colnames(model_frame_with_response) == response_cols_in_mf)
+    if (!is.null(dim(response_object)))
+      colnames(response_object) <- gsub(pattern = "\\.response", replacement = "", x = colnames(response_object))
+    reponse_mf_idx <- which(colnames(model_frame_with_response) %in% response_cols_in_mf)
     model_frame_merged <- model_frame_with_response[,-reponse_mf_idx,drop=FALSE]
     attr(model_frame_merged,'terms') <- terms(formula_merged, data = data)
     attr(attr(model_frame_merged,'terms'),'predvars') <- predvars
