@@ -192,9 +192,6 @@ merge_formulae <- function(forms, data, include_response_on_rhs = FALSE) {
   ## if response was moved to rhs, add attribute for removing/selecting it:
   if (include_response_on_rhs) {
     attr(form_out,'response_idx_in_terms') <- which(attr(terms(form_out, data=data), 'term.labels') %in% list_of_term_labels$.response)
-    tm <- get_terms_mapping(form_out, data)
-    attr(form_out,"response_cols_in_model_frame") <-
-      purrr::flatten_chr(tm$term_labels$model_frame[list_of_term_labels$.response])
     attr(form_out,'response_remover') <- paste0("~ .",paste0("-", list_of_term_labels$.response, collapse=""))
     attr(form_out,'response_remover') <- as.formula(attr(form_out,'response_remover'), env = environment(forms[[1]]))
   } else {
@@ -315,8 +312,9 @@ prepare_model_components <- function(forms, data,
 
   # separate out response object: --
   formula_merged <- update(formula_with_response, attr(formula_with_response,"response_remover"))
-  response_cols_in_mf <- attr(formula_with_response,"response_cols_in_model_frame")
-  if (!is.null(response_cols_in_mf)) {
+  if (!is.null(response_idx)) {
+    tm <- get_terms_mapping(data=data, model_frame = model_frame_with_response, terms_obj = terms_with_response)
+    response_cols_in_mf <- purrr::flatten_chr(tm$term_labels$model_frame[attr(terms_with_response,'term.labels')[response_idx]])
     response_object <- model_frame_with_response[,response_cols_in_mf,drop=TRUE]
     if (!is.null(dim(response_object)))
       colnames(response_object) <- gsub(pattern = "\\.response", replacement = "", x = colnames(response_object))
