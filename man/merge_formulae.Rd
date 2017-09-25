@@ -4,12 +4,14 @@
 \alias{merge_formulae}
 \title{Merge a list of formulae}
 \usage{
-merge_formulae(forms, data)
+merge_formulae(forms, data, include_response_on_rhs = FALSE)
 }
 \arguments{
 \item{forms}{List of formulae/formulas}
 
 \item{data}{Data.frame}
+
+\item{include_response_on_rhs}{Defaults to FALSE. Should response terms be moved to the right-hand side, so that the model-frame for the merged formula includes them in (e.g.) NA-based row-deletion? If}
 }
 \value{
 Single formula, with \code{environment(forms[[1]])}

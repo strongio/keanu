@@ -159,6 +159,14 @@ response_to_rhs <- function(formula) {
   out
 }
 
+#' Response term-indicator
+#'
+#' This is used to indicate a term on the RHS of a formula should be moved back to the LHS.
+#'
+#' @param x A variable
+#'
+#' @return The same variable
+#' @export
 .response <- function(x) {
   return(x)
 }
@@ -190,7 +198,7 @@ merge_formulae <- function(forms, data, include_response_on_rhs = FALSE) {
   else form_out <- ~1
 
   ## if response was moved to rhs, add attribute for removing/selecting it:
-  if (include_response_on_rhs) {
+  if (include_response_on_rhs & any(has_response_lgl)) {
     attr(form_out,'response_idx_in_terms') <- which(attr(terms(form_out, data=data), 'term.labels') %in% list_of_term_labels$.response)
     attr(form_out,'response_remover') <- paste0("~ .",paste0("-", list_of_term_labels$.response, collapse=""))
     attr(form_out,'response_remover') <- as.formula(attr(form_out,'response_remover'), env = environment(forms[[1]]))
@@ -311,8 +319,8 @@ prepare_model_components <- function(forms, data,
   }
 
   # separate out response object: --
-  formula_merged <- update(formula_with_response, attr(formula_with_response,"response_remover"))
   if (!is.null(response_idx)) {
+    formula_merged <- update(formula_with_response, attr(formula_with_response,"response_remover"))
     tm <- get_terms_mapping(data=data, model_frame = model_frame_with_response, terms_obj = terms_with_response)
     response_cols_in_mf <- purrr::flatten_chr(tm$term_labels$model_frame[attr(terms_with_response,'term.labels')[response_idx]])
     response_object <- model_frame_with_response[,response_cols_in_mf,drop=TRUE]
@@ -324,6 +332,8 @@ prepare_model_components <- function(forms, data,
     attr(attr(model_frame_merged,'terms'),'predvars') <- predvars
     attr(attr(model_frame_merged,'terms'),'dataClasses') <- attr(terms(model_frame_with_response),'dataClasses')[-response_idx]
   } else {
+    model_frame_merged <- model_frame_with_response
+    formula_merged <- formula_with_response
     response_object <- NULL
   }
   xlevels <- .getXlevels(attr(model_frame_merged, "terms"), model_frame_merged)
