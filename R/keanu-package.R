@@ -152,8 +152,12 @@ response_to_rhs <- function(formula) {
   resp <- formula[[2]]
   # when parentheses are used on the LHS, interpreted differently than on RHS.
   # need to wrap in a temp-function that'll be stripped off later
-  if (!is.symbol(resp) && resp[[1]] == "(")
-    resp[[1]] <- quote(.response)
+  if (!is.symbol(resp)) {
+    if (resp[[1]]=="(")
+      resp[[1]] <- quote(.response)
+    else if (as.character(resp[[1]])%in%c("+","-"))
+      resp <- call('.response',resp)
+  }
   out <- as.formula(unclass(quo(!!resp)))
   environment(out) <- environment(formula)
   out
