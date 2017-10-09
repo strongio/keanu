@@ -77,7 +77,7 @@ get_terms_mapping <- function(formula, data, ...) {
                              the_dots) )
 
   if (ncol(model_frame)==0) {
-    if (attr(terms_obj,'intercept')==1) mm_entry <- list(`Intercept`=NULL)
+    if (attr(terms_obj,'intercept')==1) mm_entry <- list(`(Intercept)`=NULL)
     else mm_entry <- NULL
     out <- list(original_data = list(term_labels=NULL, model_frame=NULL, model_matrix=NULL),
          model_frame = list(term_labels=NULL, original_data=NULL, model_matrix=NULL),
