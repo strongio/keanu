@@ -165,9 +165,9 @@ fit2$resid_plot + fit2$coef_plot +
 
 The good news is that the error from our model is getting closer to being normally distributed. But if we look closely, something very strange happend: our "session-length" predictor has flipped signs!
 
-The very first thing we did was plot session-length against checkout amount, where we could clearly see the checkout amount increasing with longer sessions. Of course, that was on the raw values, while in this new model the values have been log-transformed. Let's re-do that plot but with log-scaling on our y-axis.
+The very first thing we did was plot session-length against checkout amount, where we could clearly see the checkout amount increasing with longer sessions. Of course, that was on the raw values, while in this new model the values have been log-transformed. Let's re-do that plot but with log-scaling on our y-axis:
 
-```{r Session-Checkout Log }
+```{r Session-Checkout Log, include=TRUE}
 p_session_checkout + 
   scale_y_continuous("Second-Visit Checkout Amount (Log-Scaling)", 
                      labels = scales::dollar, trans="log", breaks = c(1,5,25,100)) +
@@ -220,13 +220,13 @@ In this case, the function is `lognormal_model`. It acts a lot like other modell
 
 For example, to model the `mu` parameter of our `checkout_amount_v2` using just `session_length`, we'd right:
 
-```{r Lognormal Model 4, include=TRUE, echo=TRUE}
+```{r Lognormal Model 4, include=TRUE, echo=TRUE, eval=FALSE}
 mu(checkout_amount_v2) ~ session_length
 ```
 
 For sigma, we'd write something similar. But since the sigma parameter must be greater than zero, we'll specify a log-link:
 
-```{r Lognormal Model 5, include=TRUE, echo=TRUE}
+```{r Lognormal Model 5, include=TRUE, echo=TRUE, eval=FALSE}
 sigma(checkout_amount_v2, link = "log") ~ session_length
 ```
 
@@ -250,7 +250,7 @@ plot_coefficients(fit3, terms = vars(starts_with("time_of_day"), session_length)
   ggthemes::theme_hc() +
   scale_y_continuous("Estimate") +
   scale_x_discrete("Term") +
-  ggtitle("Keanu Model Coefficients")
+  ggtitle("Lognormal Model — Coefficients")
 ```
 
 Since the `mu` parameter of the lognormal distribution corresponds to the median, this explains why the median decreased. Meanwhile, the mean (expected value) of this distribution is given by $exp(\mu + \frac{\sigma^2}{2})$. When we plug our coefficients into this, we can see that model correctly captures that the expected-value goes up with longer sessions:
