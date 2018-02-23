@@ -1,12 +1,12 @@
 ---
 title: "Enter the Model.Matrix with the keanu package"
-editor_options: 
-  chunk_output_type: console
-output: 
-  html_document: 
+output:
+  html_document:
     fig_height: 6
     fig_width: 8
     theme: cerulean
+editor_options:
+  chunk_output_type: console
 ---
 
 ```{r setup, include=FALSE}
@@ -28,6 +28,26 @@ library('broom')
 library('keanu')
 #devtools::install_github("thomasp85/patchwork")
 library(patchwork)
+
+theme_strong <- function (rotate_xlab=FALSE)  {
+  out <- ggplot2::theme_bw() +
+    ggplot2::theme(title = ggplot2::element_text(size = 14, family = "SFNS Display"),
+                   legend.text = ggplot2::element_text(size = 10, family = "SFNS Display"),
+                   plot.title = ggplot2::element_text(size = 18, family = "SFNS Display"),
+                   axis.text = ggplot2::element_text(size = 14),
+                   axis.title = ggplot2::element_text(size = 16, family = "SFNS Display"),
+                   text = ggplot2::element_text(family = "SFNS Display"),
+                   legend.background = ggplot2::element_rect(fill = "white"),
+                   panel.grid.major = ggplot2::element_blank(),
+                   panel.grid.minor = ggplot2::element_blank(),
+                   panel.border = ggplot2::element_rect(colour = "black", size = 2),
+                   strip.background = ggplot2::element_rect(fill = "white", colour = NA),
+                   strip.text.x = ggplot2::element_text(size = 14, face = "bold", colour = "black"),
+                   strip.text.y = ggplot2::element_text(size = 14, face = "bold", colour = "black"))
+  if (rotate_xlab)
+    out <- out + theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  return(out)
+}
 
 add_fourier <- function (.data, time_col, period, K)  {
   if (length(period) != length(K)) stop("Number of periods does not match number of orders")
@@ -100,7 +120,7 @@ predictors <- c('session_length', 'landing_page', 'region', 'client',
 ```{r Session Plot, include=TRUE, fig.width=8, fig.height=5}
 p_session_checkout <-  ggplot(df_return_segment, aes(session_length, checkout_amount_v2)) +
   geom_point(alpha=.25) + 
-  ggthemes::theme_hc() +
+  theme_strong() +
   scale_x_continuous("First-Visit Session Length (Hours)", breaks=seq(1,5,1))
 p_session_checkout + 
   scale_y_continuous("Second-Visit Checkout Amount", labels = scales::dollar) +
@@ -119,17 +139,17 @@ fit1$resid_plot <- augment(fit1) %>%
   geom_histogram(bins=60) +
   scale_x_continuous("", labels = scales::comma) +
   scale_y_continuous("Count", labels = scales::comma) +
-  ggthemes::theme_hc() +
-  ggtitle("Residuals") + theme(plot.title = element_text(hjust = 0.5, size = 12))
+  theme_strong() +
+  ggtitle("Residuals") + theme(plot.title = element_text(hjust = 0.5))
 
 fit1$coef_plot <- plot_coefficients(fit1) +
-  ggthemes::theme_hc() +
+  theme_strong(rotate_xlab=TRUE) +
   scale_x_discrete("") + scale_y_continuous("Estimate") + 
-  ggtitle("Coefficients") + theme(plot.title = element_text(hjust = 0.5, size = 12))
+  ggtitle("Coefficients") + theme(plot.title = element_text(hjust = 0.5))
 
 fit1$resid_plot + fit1$coef_plot + 
   plot_layout(ncol = 1) + 
-  plot_annotation("First Model Attempt")
+  plot_annotation("First Model Attempt", theme = theme(plot.title=element_text(size=18)))
 ```
 
 As suspected, we're violating a key assumption of linear models, which is that our errors be normally distributed. So we shouldn't feel comfortable interpreting the results of the model.
@@ -146,13 +166,13 @@ fit2$resid_plot <- augment(fit2) %>%
   geom_histogram(bins=60) +
   scale_x_continuous("", labels = scales::comma) +
   scale_y_continuous("Count", labels = scales::comma) +
-  ggthemes::theme_hc() +
-  ggtitle("Residuals") + theme(plot.title = element_text(hjust = 0.5, size = 12))
+  theme_strong() +
+  ggtitle("Residuals") + theme(plot.title = element_text(hjust = 0.5))
 
 fit2$coef_plot <- plot_coefficients(fit2) +
-  ggthemes::theme_hc() +
+  theme_strong(rotate_xlab=TRUE)+
   scale_x_discrete("") + scale_y_continuous("Estimate") + 
-  ggtitle("Coefficients") + theme(plot.title = element_text(hjust = 0.5, size = 12)) +
+  ggtitle("Coefficients") + theme(plot.title = element_text(hjust = 0.5)) +
   ggrepel::geom_text_repel(data = function(x) filter(x,term=="session_length"),
                            point.padding = 1, 
                            arrow = arrow(type = 'open', length = unit(.25,"cm")),
@@ -160,7 +180,7 @@ fit2$coef_plot <- plot_coefficients(fit2) +
 
 fit2$resid_plot + fit2$coef_plot + 
   plot_layout(ncol = 1) + 
-  plot_annotation("Second Model Attempt")
+  plot_annotation("Second Model Attempt", theme = theme(plot.title=element_text(size=18)))
 ```
 
 The good news is that the error from our model is getting closer to being normally distributed. But if we look closely, something very strange happend: our "session-length" predictor has flipped signs!
@@ -182,7 +202,7 @@ What is happening here is a conflict between the mean and the median. As session
 augment(fit2) %>%
   ggplot(., aes(session_length, .resid)) +
   geom_point(alpha=.10) + stat_summary_bin(fun.data=median_hilow, size=.75, breaks=seq(0,6,by=1)) +
-  ggthemes::theme_hc() +
+  stronger::theme_strong() +
   scale_x_continuous("First-Visit Session Length (Hours)", breaks=seq(1,5,1)) +
   scale_y_continuous("Residuals from the Second Model")
 ```
@@ -247,7 +267,7 @@ And... that's it! Looking at the coefficients (for now, focusing on the interest
 
 ```{r, include=TRUE}
 plot_coefficients(fit3, terms = vars(starts_with("time_of_day"), session_length)) +
-  ggthemes::theme_hc() +
+  theme_strong(rotate_xlab=TRUE) +
   scale_y_continuous("Estimate") +
   scale_x_discrete("Term") +
   ggtitle("Lognormal Model — Coefficients")
