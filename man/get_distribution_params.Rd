@@ -5,14 +5,14 @@
 \title{Given coefficients (in a data.frame) and a list of model-mats, get predicted parameters for the
 distribution}
 \usage{
-get_distribution_params(df_pars, list_of_model_mats, inv_link_funs = NULL)
+get_distribution_params(par_tbl, model_mats, inv_link_funs = NULL)
 }
 \arguments{
-\item{df_pars}{A data.frame with parameter, term, beta}
+\item{par_tbl}{A data.frame with parameter, term, beta}
 
-\item{list_of_model_mats}{A list of model-matrices}
+\item{model_mats}{A list of model-matrices}
 
-\item{inv_link_funs}{A names list of inverse-link functions (names must match parameters)}
+\item{inv_link_funs}{A named list of inverse-link functions (names must match parameters)}
 }
 \value{
 A data.frame where each row corresponds to the rows of the model-mats, and each column is

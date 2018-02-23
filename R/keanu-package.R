@@ -22,7 +22,6 @@ NULL
 #' @param x A character
 #'
 #' @return An expression
-#' @export
 parse_char <- function(x) {
   stopifnot(is.character(x))
   parse(text = x)[[1]]
@@ -230,52 +229,6 @@ na.warn <- function (object) {
   stats::na.exclude(object)
 }
 
-#' Fit a keanu model
-#'
-#' @param forms A list of formulas, with names for each parameter/aspect of the target-variable
-#'   (e.g., 'mean' and 'sd' for a normally distributed variable where both of these parameters can
-#'   depend on covariates). The first formula should have a left-hand side, which specifies the
-#'   target-variable, as is typical for R modelling functions. The remaining formulas do not need
-#'   left-hand-sides.
-#' @param data A data.frame
-#' @param error_fun A function which takes two arguments: (1) a data.frame where the columns are
-#'   parameters of the distribution being predicted, and rows correspond to observations, and (2)
-#'   the target variable being predicted. It returns something to be minimized: e.g., the error, the
-#'   negative-log-likelihood.
-#' @param penalty_fun A function which takes a data.frame with parameter, term, beta, and returns a
-#'   penalty. This is added to the result of \code{error_fun}, so that they are minimized jointly.
-#' @param inv_link_funs A named list of inverse-link functions: i.e., functions that transform
-#'   real-valued predictions into (potentially constrained) parameter-estimates. The list must be
-#'   named for each parameter of the distribution. Defaults to the identity function for all.
-#' @param standardize_x Either a logical specifying whether to center/scale numeric predictors in
-#'   the model.frame, or a list with names 'center' and 'scale', each of which in turn are named
-#'   numeric vectors specifying centering/scaling. Note that terms that result in matrices (e.g.,
-#'   `stats::poly`) will not be scaled/centered, nor will factors.
-#' @param na.action A function specifying what to do with NAs. Defaults to \code{na.warn}.
-#' @param contrasts Passed to \code{model.matrix}.
-#' @param inits Not yet supported.
-#' @param optim_args A named list that will be passed as arguments to \code{stats::optim}.
-#'
-#' @return An object of class 'keanu_model', with predict method
-#' @export
-keanu_model <- function(
-  forms, data,
-
-  error_fun,
-  penalty_fun = function(x) return(numeric(0)),
-  inv_link_funs = NULL,
-
-  standardize_x = FALSE,
-  na.action = na.warn,
-  contrasts = NULL,
-
-  inits = NULL,
-  optim_args = list(method = "BFGS", control = list(trace=as.integer(interactive()),maxit=250)) ) {
-
-  mc <- prepare_model_components(forms = forms, data = data, standardize_x = standardize_x, na.action = na.action, contrasts = contrasts)
-  optim_from_mc(model_components = mc, error_fun = error_fun, penalty_fun = penalty_fun, inv_link_funs = inv_link_funs, inits = inits, optim_args = optim_args)
-}
-
 #' Prepare model-components
 #'
 #' @param forms A list of formulas.
@@ -394,7 +347,7 @@ prepare_model_components <- function(forms, data,
                                     model_frame = model_frame_std,
                                     terms_obj = terms_obj)
   list_of_terms <- purrr::map(forms, terms, data = data)
-  list_of_model_mats <- purrr::map(list_of_terms, function(this_terms) {
+  model_mats <- purrr::map(list_of_terms, function(this_terms) {
     this_term_map <- term_mapping$term_labels$model_matrix
     if (length(this_term_map)>0) needed_cols <- unique(purrr::flatten_chr(this_term_map[attr(this_terms,'term.labels')]))
     else needed_cols <- c()
@@ -403,7 +356,9 @@ prepare_model_components <- function(forms, data,
   })
 
   # return--
-  out <- list(list_of_model_mats= list_of_model_mats,
+  out <- list(model_mats= model_mats,
+              formula_merged = formula_merged,
+              model_frame_merged = model_frame_merged,
               response_object = response_object,
               na_dropped_idx= attr(model_frame_merged,"na.action"),
               standardize_x= standardize_x,
@@ -416,15 +371,63 @@ prepare_model_components <- function(forms, data,
 
 }
 
+#' Plot coefficients from a model
+#'
+#' @param x A model object
+#' @param terms Terms to include in plot, defaulting to everything but the intercept. This can be a
+#'   character-vector, or, more conveniently, a call to \code{dplyr::vars}, which provides a
+#'   flexible semantics for including/excluding arbitrary terms.
+#' @param se_multi Standard-errors will be mulitplied by this to obtain confidence-intervals.
+#' @param ... Arguments to be passed to subsequent methods.
+#'
+#' @return A ggplot2 object.
+#' @export
+plot_coefficients <- function(x, terms, se_multi, ...) {
+  UseMethod("plot_coefficients")
+}
+
+#' @export
+plot_coefficients.default <- function(x, terms = NULL, se_multi = 1.96, ...) {
+
+  df_est <- broom::tidy(x)
+
+  if (!all(c('term', 'estimate', 'std.error') %in% colnames(df_est) ))
+    stop(call. = FALSE,
+         "No `plot_coefficients` method defined for object with classes:\n",
+         paste(class(x), collapse = ", ") )
+
+  if (is.null(terms)) if (is.null(terms)) terms <- dplyr::vars(-`(Intercept)`)
+  stopifnot(is.character(terms) || inherits(terms, "col_list") || inherits(terms,"quosures") )
+  if (is.character(terms)) terms <- paste0("`", terms, "`")
+  terms <- dplyr::select_vars_(vars = unique(df_est$term), args = terms)
+
+  df_est <- filter(.data = df_est, term %in% terms)
+
+  ggplot(df_est, aes(x=term, y=estimate)) +
+    geom_pointrange(aes(ymin = estimate - se_multi*std.error, ymax = estimate + se_multi*std.error)) +
+    geom_hline(yintercept = 0, linetype='dashed') +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+}
+
+#' Return whatever is inside the parantheses of a string.
+#'
+#' @param x A character-vector.
+#'
+#' @return Whatever is inside the parentheses. If no parantheses, return original string.
+inside_parens <- function(x) {
+  re <- "\\(([^()]+)\\)"
+  result <- map(x, ~gsub(re, "\\1", str_extract_all(.x, re)[[1]]))
+  map2_chr(x, result, function(orig, match) {if (length(match)>0) match else orig})
+}
 
 #' Take a data.frame with parameter, term, beta, unroll into a flat vector
 #'
-#' @param df_pars A data.frame with parameter, term, beta
+#' @param par_tbl A data.frame with parameter, term, beta
 #'
 #' @return A named numeric vector, named with parameter__sep__term
 #' @export
-unroll_df_pars <- function(df_pars) {
-  with(df_pars, structure(beta, names=paste0(parameter, "__sep__", term)))
+unroll_par_tbl <- function(par_tbl) {
+  with(par_tbl, structure(beta, names=paste0(parameter, "__sep__", term)))
 }
 
 #' Roll up a flat vector into a data.frame with parameter, term, beta
@@ -433,24 +436,24 @@ unroll_df_pars <- function(df_pars) {
 #'
 #' @return A data.frame with parameter, term, beta
 #' @export
-roll_df_pars <- function(unrolled_par) {
+roll_par_tbl <- function(unrolled_par) {
   tidyr::separate(col = "name", into = c("parameter", "term"), sep = "__sep__", data = tibble::enframe(unrolled_par, value = 'beta'))
 }
 
 #' Given coefficients (in a data.frame) and a list of model-mats, get predicted parameters for the
 #' distribution
 #'
-#' @param df_pars A data.frame with parameter, term, beta
-#' @param list_of_model_mats A list of model-matrices
-#' @param inv_link_funs A names list of inverse-link functions (names must match parameters)
+#' @param par_tbl A data.frame with parameter, term, beta
+#' @param model_mats A list of model-matrices
+#' @param inv_link_funs A named list of inverse-link functions (names must match parameters)
 #'
 #' @return A data.frame where each row corresponds to the rows of the model-mats, and each column is
 #'   a distribution-parameter.
 #' @export
-get_distribution_params <- function(df_pars, list_of_model_mats, inv_link_funs = NULL) {
-  list_of_pars <- purrr::map(.x = split(df_pars, df_pars$parameter),
+get_distribution_params <- function(par_tbl, model_mats, inv_link_funs = NULL) {
+  list_of_pars <- purrr::map(.x = split(par_tbl, par_tbl$parameter),
                              .f = function(df) tibble::deframe(df[,c('term','beta'),drop=FALSE]) )
-  list_of_model_mats <- list_of_model_mats[names(list_of_pars)]
+  model_mats <- model_mats[names(list_of_pars)]
   if (is.null(inv_link_funs))
     inv_link_funs <- purrr::map(list_of_pars, ~identity)
   else
@@ -459,7 +462,7 @@ get_distribution_params <- function(df_pars, list_of_model_mats, inv_link_funs =
   list_of_pars_per_obs <- purrr::map(
     .x = names(list_of_pars),
     .f = function(param_name) {
-      inv_link_funs[[param_name]]( as.matrix(list_of_model_mats[[param_name]]) %*% matrix( list_of_pars[[param_name]] ) )
+      inv_link_funs[[param_name]]( as.matrix(model_mats[[param_name]]) %*% matrix( list_of_pars[[param_name]] ) )
     })
   names(list_of_pars_per_obs) <- names(list_of_pars)
   tibble::as_data_frame(purrr::map(list_of_pars_per_obs, as.numeric))
@@ -467,127 +470,28 @@ get_distribution_params <- function(df_pars, list_of_model_mats, inv_link_funs =
 
 #' Initialize a dataframe with parameter, term, beta
 #'
-#' @param list_of_model_mats A list of model-matrices
+#' @param model_mats A list of model-matrices
 #'
 #' @return A data.frame with parameter, term, beta
 #' @export
-initialize_df_pars <- function(list_of_model_mats) {
-  nms <- purrr::map(list_of_model_mats, colnames)
+initialize_par_tbl <- function(model_mats) {
+  nms <- purrr::map(model_mats, colnames)
   df_nested <- tibble::enframe(name = 'parameter', value = 'term', nms)
   df_unnested <- tidyr::unnest(df_nested)
   df_unnested$beta <- runif(n = nrow(df_unnested), min = -2, max = 2)
   df_unnested
 }
 
-#' Given the results of `prepare_model_components`, find coefficients
+
+#' Produce univariate predictions
 #'
-#' Given the results of `prepare_model_components`, find coefficients which minimize some error
-#' function (or minimize negative log-liklihood), plus an optional penalty.
+#' @param object A model object
 #'
-#' @param model_components The results of `prepare_model_components`
-#' @param error_fun A function which takes two arguments: (1) a data.frame where the columns are
-#'   parameters of the distribution being predicted, and rows correspond to observations, and (2)
-#'   the target variable being predicted.
-#' @param penalty_fun A function which takes a data.frame with parameter, term, beta, and returns a
-#'   penalty.
-#' @param inv_link_funs A named list of inverse-link functions: i.e., functions that transform
-#'   real-valued predictions into (potentially constrained) parameter-estimates. The list must be
-#'   named for each parameter of the distribution. Defaults to the identity function for all.
-#' @param inits Not yet supported.
-#' @param optim_args A named list that will be passed as arguments to \code{stats::optim}.
-#'
-#' @return An object of class 'keanu_model', with a predict method.
+#' @return A list of data.frames, one for each column in the model.frame, each consisting of that
+#'   column and the corresponding predictions.
 #' @export
-optim_from_mc <- function(
-  model_components,
-  error_fun,
-  penalty_fun = function(x) return(numeric(0)),
-  inv_link_funs = NULL,
-  inits = NULL,
-  optim_args = list(method = "BFGS", control = list(trace=as.integer(interactive()),maxit=250)) ) {
-
-  df_pars <- initialize_df_pars(model_components$list_of_model_mats)
-  if (!is.null(inits))
-    stop("Please report this error to the package maintainer.")
-  par <- unroll_df_pars(df_pars)
-
-  fun_to_minimize <- function(par, list_of_mm, Y, penalty_fun) {
-    df_pars <- roll_df_pars(par)
-    df_dist_params <- get_distribution_params(df_pars, list_of_mm, inv_link_funs = inv_link_funs)
-    sum( c( error_fun(df_dist_params, Y) , penalty_fun(df_pars) ) )
-  }
-
-  out <- list()
-  optim_args$par <- par
-  optim_args$fn <- fun_to_minimize
-  if (!is.element('hessian', names(optim_args))) optim_args$hessian <- TRUE
-  optim_args$list_of_mm <- quote(model_components$list_of_model_mats)
-  optim_args$Y <- quote(model_components$response_object)
-  optim_args$penalty_fun <- penalty_fun
-  out$optim <- do.call(optim,optim_args)
-
-  ## collect results, add prior
-  out$cov <- matrix(nrow = length(par), ncol = length(par),
-                    dimnames = list(names(par),names(par)))
-  if (!is.null(out$optim$hessian) &&
-      all(!is.na(out$optim$hessian)) &&
-      all(!is.nan(out$optim$hessian)) &&
-      all(is.finite(out$optim$hessian)) &&
-      all(eigen(out$optim$hessian)$values > 0)) {
-    fixed_lgl <- logical(length(par)) # TO DO
-    replace_idx <- matrix(!fixed_lgl,nrow = length(fixed_lgl), ncol = length(fixed_lgl)) &
-      matrix(!fixed_lgl,nrow = length(fixed_lgl), ncol = length(fixed_lgl), byrow = TRUE)
-    out$cov[replace_idx] <- solve(out$optim$hessian)
-
-  } else {
-    if (optim_args$hessian)
-      warning(call. = FALSE,
-              "Optimization has probably not converged - Hessian is not positive definite. ")
-  }
-  df_est <- roll_df_pars( out$optim$par )
-  out$res_trans <-
-    left_join(x = rename(.data = df_est , estimate = beta),
-              y = rename(.data = roll_df_pars( sqrt(diag(out$cov)) ), se = beta) ,
-              by = c('parameter','term'))
-  out$res_trans <- mutate(.data = out$res_trans)
-
-  out$model_components <- model_components
-  out$error_fun <- error_fun
-  out$penalty_fun <- penalty_fun
-  out$inv_link_funs <- inv_link_funs
-
-  class(out) <- c("keanu_model", class(out))
-  out
-
+univariate_predictions <- function(object, ...) {
+  UseMethod("univariate_predictions")
 }
 
-#' @export
-predict.keanu_model <- function(object, newdata, na.action = na.pass, ...) {
-  mc <- prepare_model_components(forms = purrr::map(object$model_components$forms, remove_lhs),
-                                 data = newdata,
-                                 predvars = object$model_components$predvars,
-                                 standardize_x = object$model_components$standardize_x,
-                                 na.action = na.action,
-                                 contrasts = object$model_components$contrasts,
-                                 xlev = object$model_components$xlev,
-                                 drop.unused.levels = FALSE)
-  out <- get_distribution_params(df_pars = select(object$res_trans, parameter, term, beta = estimate),
-                                 list_of_model_mats = mc$list_of_model_mats,
-                                 inv_link_funs = object$inv_link_funs)
-  as.matrix(out)
-}
-
-#' @export
-summary.keanu_model <- function(object, conf = .95, ...) {
-  multi <- -qnorm((1-conf)/2)
-  df_print <- mutate(.data = object$res_trans,
-                     lower = .data$estimate - multi*se,
-                     upper = .data$estimate + multi*se)
-  df_print
-}
-
-#' @export
-print.keanu_model <- function(x, ...) {
-  print(x$res_trans, n=Inf)
-}
 
