@@ -378,7 +378,8 @@ prepare_model_components <- function(forms, data,
 #'   character-vector, or, more conveniently, a call to \code{dplyr::vars}, which provides a
 #'   flexible semantics for including/excluding arbitrary terms.
 #' @param se_multi Standard-errors will be mulitplied by this to obtain confidence-intervals.
-#' @param ... Arguments to be passed to subsequent methods.
+#' @param ... Arguments to be passed to subsequent methods. Additional arguments will be passed to
+#' `ggplot2::geom_pointrange`
 #'
 #' @return A ggplot2 object.
 #' @export
@@ -404,7 +405,9 @@ plot_coefficients.default <- function(x, terms = NULL, se_multi = 1.96, ...) {
   df_est <- filter(.data = df_est, term %in% terms)
 
   ggplot(df_est, aes(x=term, y=estimate)) +
-    geom_pointrange(aes(ymin = estimate - se_multi*std.error, ymax = estimate + se_multi*std.error)) +
+    geom_pointrange(aes(ymin = estimate - se_multi*std.error,
+                        ymax = estimate + se_multi*std.error),
+                    ... = ...) +
     geom_hline(yintercept = 0, linetype='dashed') +
     theme(axis.text.x = element_text(angle = 45, hjust = 1))
 }

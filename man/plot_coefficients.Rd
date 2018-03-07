@@ -15,7 +15,8 @@ flexible semantics for including/excluding arbitrary terms.}
 
 \item{se_multi}{Standard-errors will be mulitplied by this to obtain confidence-intervals.}
 
-\item{...}{Arguments to be passed to subsequent methods.}
+\item{...}{Arguments to be passed to subsequent methods. Additional arguments will be passed to
+`ggplot2::geom_pointrange`}
 }
 \value{
 A ggplot2 object.

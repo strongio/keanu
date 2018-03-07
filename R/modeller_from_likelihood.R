@@ -318,7 +318,12 @@ logLik.keanu_model <- function(object, ...) {
 }
 
 #' @export
-plot_coefficients.keanu_model <- function(x, terms = NULL, se_multi = 1.96, link_only=TRUE) {
+plot_coefficients.keanu_model <- function(x,
+                                          terms = NULL,
+                                          se_multi = 1.96,
+                                          link_only = TRUE,
+                                          facet = TRUE,
+                                          ...) {
   df_est <- .estimate_summary(x, se_multi=se_multi)
 
   # parse terms:
@@ -339,11 +344,17 @@ plot_coefficients.keanu_model <- function(x, terms = NULL, se_multi = 1.96, link
   df_est$parameter <- forcats::fct_inorder(df_est$parameter)
 
   # prep plot:
-  ggplot(df_est, aes(x=term, y=estimate)) +
-    geom_pointrange(aes(ymin = lower, ymax = upper)) +
-    facet_wrap(~parameter, scales = "free", labeller='label_both') +
+  out <- ggplot(df_est, aes(x=term, y=estimate, group = parameter, shape=parameter)) +
+    geom_pointrange(aes(ymin = lower, ymax = upper), ... = ...) +
     geom_hline(yintercept = 0, linetype='dashed') +
     theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+  if (facet)
+    out <- out +
+      facet_wrap(~parameter, scales = "free", labeller='label_both') +
+      scale_shape_discrete(guide=FALSE)
+
+  return(out)
 }
 
 

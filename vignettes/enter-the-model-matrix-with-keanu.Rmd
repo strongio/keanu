@@ -29,6 +29,7 @@ library('keanu')
 #devtools::install_github("thomasp85/patchwork")
 library(patchwork)
 
+color_scale_discrete_strong <- c("#00CBFE","#2B4141","#8AB9B5","#C8C2AE")
 theme_strong <- function (rotate_xlab=FALSE)  {
   out <- ggplot2::theme_bw() +
     ggplot2::theme(title = ggplot2::element_text(size = 14, family = "SFNS Display"),
@@ -77,19 +78,20 @@ add_fourier <- function (.data, time_col, period, K)  {
 }
 ```
 
-One of R's strengths is its powerful formula-based interface to modelling, which saves you the headache of one-hot-encoding categorical variables, manually constructing higher-level interactions, and rewriting models just to add or drop terms. Thanks to R's rich ecosystem of packages, for many situations you'll find a ready-to-use modelling solution that leverages this formula-interface. 
+One of R's strengths is its powerful formula-based interface to modelling. It saves you the headache of one-hot-encoding categorical variables, manually constructing higher-level interactions, and rewriting models just to add or drop terms. Instead, you just specify the model you want in high-level notation, and
+R will handle transforming it into the raw numerical model-matrix that's needed for model-fitting.
 
-But there will inevitably be situations where out-of-the-box solutions don't fit your use-case. When that happens, you're stuck with something more time-consuming: hand-coding the underlying model-fitting, perhaps using numerical optimization (e.g., `stats::optim`), or maybe a language like [Stan](http://mc-stan.org/).
+Thanks to R's rich ecosystem of packages, for many situations you'll find a ready-to-use modelling solution that leverages this formula-interface. But there will inevitably be situations where out-of-the-box solutions don't fit your use-case. When that happens, you're stuck with something more time-consuming: hand-coding the underlying model-fitting, perhaps using numerical optimization (e.g., `stats::optim`), or maybe a language like [Stan](http://mc-stan.org/).
 
 We wrote `keanu` to make tackling situations like these painless and fruitful. It allows you to focus on the core aspects of your models, because it provides tools that handle the busywork of translating abstract model-specifications into the nuts-and-bolts of model-fitting. 
 
-At Strong, we've found `keanu` helpful for the early stages of projects, where the goal is to leverage interpretable models to quickly gain insights. These models can inform later efforts that might involve engineering more scalable and robust custom solutions.
+Let's introduce the package with a quick example.
 
 ## An Example
 
-We'll introduce the package with a simple example. An online retailer is interested in better understanding and predicting the purchasing behavior of a particular segment of their customers. This segment consists of customers who visited the website once, didn't make a purchase, then later returned and made a purchase. The retailer would like to take metrics from that first visit and use them to predict the purchase-amount on the second visit.
+An online retailer is interested in better understanding and predicting the purchasing behavior of a particular segment of their customers. This segment consists of customers who visited the website once, didn't make a purchase, then later returned and made a purchase. The retailer would like to take metrics from that first visit and use them to predict the purchase-amount on the second visit.
 
-Let's start to get acquianted with the data: here's a plot of first-visit session-length and second-visit purchase-amount:
+They're particularly interested in the relationship between first-visit session-length and second-visit purchase-amount:
 
 ```{r Generate Data}
 set.seed(22)
@@ -124,82 +126,72 @@ p_session_checkout <-  ggplot(df_return_segment, aes(session_length, checkout_am
   scale_x_continuous("First-Visit Session Length (Hours)", breaks=seq(1,5,1))
 p_session_checkout + 
   scale_y_continuous("Second-Visit Checkout Amount", labels = scales::dollar) +
-  stat_smooth(method="lm")
+  stat_smooth(method="lm", color=color_scale_discrete_strong[1]) +
+  geom_hline(yintercept = 0)
 ```
 
-We can see that checkout amounts are extremely skewed and (obviously) always above zero. This makes it unlikely that a standard linear-model will be appropriate — but let's confirm by giving it a shot.
+We'd like to better understand these data. We have a handful of predictors, and we'd like to assess how they work together — rather than looking at them in isolation like in the plot above. One simple approach is multiple regression. We'll try two versions: first on the vanilla data, then after log-transforming the target-variable (since it's skewed and constrained to be positive).
 
 ```{r LM, echo=TRUE}
-fit1 <- lm(formula = checkout_amount_v2 ~ ., data = df_return_segment[c('checkout_amount_v2',predictors)])
+# vanilla model: we're just dividing the DV by 10 so that the coefficients for the two models are 
+# easier to plot on the same graph
+vanilla_model <- lm(formula = checkout_amount_v2/10 ~ ., 
+                    data = df_return_segment[c('checkout_amount_v2',predictors)])
+
+# log-transformed model
+log_trans_model <- lm(formula = log(checkout_amount_v2) ~ .,  
+                      data = df_return_segment[c('checkout_amount_v2', predictors)])
 ```
 
 ```{r LM-Plots, include=TRUE}
-fit1$resid_plot <- augment(fit1) %>%
-  ggplot(aes(x=.resid)) +
+pd <- position_dodge(.5)
+bind_rows(.id = 'model', 
+          `Vanilla` = broom::tidy(vanilla_model),
+          `Log-Transformed` = broom::tidy(log_trans_model)) %>%
+  filter(term != "(Intercept)") %>%
+  ggplot(aes(x=term, y=estimate, group = model, color=model)) +
+  geom_point(position = pd, size=2.5) +
+  geom_linerange(aes(ymin = estimate - 1.96*std.error, ymax = estimate + 1.96*std.error), 
+                 position = pd, size=1) +
+  geom_hline(yintercept = 0, linetype='dashed') +
+  theme_strong() +
+  scale_color_manual(name="Model", values = color_scale_discrete_strong[-3]) +
+  scale_x_discrete("Predictor") + scale_y_continuous("Estimate") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+bind_rows(.id = 'model', 
+          `Vanilla` = broom::augment(vanilla_model),
+          `Log-Transformed` = broom::augment(log_trans_model)) %>%
+  ggplot(aes(x=.resid, fill = model)) +
   geom_histogram(bins=60) +
-  scale_x_continuous("", labels = scales::comma) +
+  scale_x_continuous("Residuals", labels = scales::comma) +
   scale_y_continuous("Count", labels = scales::comma) +
   theme_strong() +
-  ggtitle("Residuals") + theme(plot.title = element_text(hjust = 0.5))
-
-fit1$coef_plot <- plot_coefficients(fit1) +
-  theme_strong(rotate_xlab=TRUE) +
-  scale_x_discrete("") + scale_y_continuous("Estimate") + 
-  ggtitle("Coefficients") + theme(plot.title = element_text(hjust = 0.5))
-
-fit1$resid_plot + fit1$coef_plot + 
-  plot_layout(ncol = 1) + 
-  plot_annotation("First Model Attempt", theme = theme(plot.title=element_text(size=18)))
+  scale_fill_manual(name="Model", guide=FALSE, values = color_scale_discrete_strong[-3]) +
+  facet_wrap(~model, ncol=1, scales='free') +
+  coord_cartesian(expand = FALSE)
 ```
 
-As suspected, we're violating a key assumption of linear models, which is that our errors be normally distributed. So we shouldn't feel comfortable interpreting the results of the model.
+A first glance at the results suggests that the log-transformed model is probably more appropriate: its residuals are more normally-distributed, which is an important assumption in regression models like these. No surprises there.
 
-One way of thinking about our problem is that our the checkout-amounts clearly don't follow anything like a normal distribution. Instead, they seem to more closely follow a [lognormal distribution](https://en.wikipedia.org/wiki/Log-normal_distribution). To fit a model more appropriate for this kind of data, we can take the log of the checkout-amounts:
+However, if we look closely, something very strange is going on across these two models. Our "session-length" predictor is flipping signs!
 
-```{r Log-LM, echo=TRUE}
-fit2 <- lm(formula = log(checkout_amount_v2) ~ .,  data = df_return_segment[c('checkout_amount_v2', predictors)])
-```
-
-```{r Log-LM Plots, include=TRUE}
-fit2$resid_plot <- augment(fit2) %>%
-  ggplot(aes(x=.resid)) +
-  geom_histogram(bins=60) +
-  scale_x_continuous("", labels = scales::comma) +
-  scale_y_continuous("Count", labels = scales::comma) +
-  theme_strong() +
-  ggtitle("Residuals") + theme(plot.title = element_text(hjust = 0.5))
-
-fit2$coef_plot <- plot_coefficients(fit2) +
-  theme_strong(rotate_xlab=TRUE)+
-  scale_x_discrete("") + scale_y_continuous("Estimate") + 
-  ggtitle("Coefficients") + theme(plot.title = element_text(hjust = 0.5)) +
-  ggrepel::geom_text_repel(data = function(x) filter(x,term=="session_length"),
-                           point.padding = 1, 
-                           arrow = arrow(type = 'open', length = unit(.25,"cm")),
-                           label = "Why is \nthis negative?", nudge_x = 1, nudge_y = -.1)
-
-fit2$resid_plot + fit2$coef_plot + 
-  plot_layout(ncol = 1) + 
-  plot_annotation("Second Model Attempt", theme = theme(plot.title=element_text(size=18)))
-```
-
-The good news is that the error from our model is getting closer to being normally distributed. But if we look closely, something very strange happend: our "session-length" predictor has flipped signs!
-
-The very first thing we did was plot session-length against checkout amount, where we could clearly see the checkout amount increasing with longer sessions. Of course, that was on the raw values, while in this new model the values have been log-transformed. Let's re-do that plot but with log-scaling on our y-axis:
+We already plotted session-length against checkout amount, where we could clearly see the checkout amount increasing with longer sessions. This matches the vanilla model. The log-transformed model says the opposite. Let's try re-doing that plot but with log-scaling on our y-axis:
 
 ```{r Session-Checkout Log, include=TRUE}
 p_session_checkout + 
   scale_y_continuous("Second-Visit Checkout Amount (Log-Scaling)", 
                      labels = scales::dollar, trans="log", breaks = c(1,5,25,100)) +
-  stat_smooth(method="lm")
+  stat_smooth(method="lm", color=color_scale_discrete_strong[1])
 ```
 
-Once we've re-scaled the values like this, it looks like longer sessions mean smaller purchases (just like the model said). 
+Once we've re-scaled the values like this, it looks like longer sessions mean smaller purchases (just like the log-transformed model said)!
 
-What is happening here is a conflict between the mean and the median. As session-length goes down, the median checkout-amount goes down. But the variance increases, and checkout amounts are always positive, so this has an assymetric effect: while the median goes down, but the mean goes up.
+What is happening here is a conflict between the mean and the median. As session-length goes down, the median checkout-amount goes down. But the variance increases, and checkout amounts are always positive, so this has an assymetric effect: while the median goes down, the mean goes up.
 
 ```{r Homeoskedacity, eval=FALSE}
-augment(fit2) %>%
+# bonus: the problem is we are violating the homeoskedacity
+augment(log_trans_model) %>%
   ggplot(., aes(session_length, .resid)) +
   geom_point(alpha=.10) + stat_summary_bin(fun.data=median_hilow, size=.75, breaks=seq(0,6,by=1)) +
   stronger::theme_strong() +
@@ -212,8 +204,9 @@ p_session_checkout +
   stat_summary_bin(fun.y = median, geom='line', aes(color='Median'),size=2) +
   stat_summary_bin(fun.y = mean, geom='line', aes(color='Mean'),size=2) +
   coord_cartesian(ylim=c(0,75)) +
-  scale_color_brewer("", palette = "Set1", direction = -1) +
-  scale_y_continuous("Second-Visit Checkout Amount", labels = scales::dollar)
+  scale_color_brewer("", palette = "Paired", direction = -1) +
+  scale_y_continuous("Second-Visit Checkout Amount", labels = scales::dollar) +
+  geom_hline(yintercept = 0)
 ```
 
 This is a frustrating situation: two out-of-the-box solutions to modelling our data are giving us conflicting and hard-to-interpret results, due to violated model-assumptions. Perhaps we should avoid modelling altogether, using descriptives and visualizations on each predictor separately? Or in the opposite direction, we could spend time coding up a custom model. Neither of these situations are ideal: we're looking for quick insights in order to drive the more time-consuming, central tasks on the project — we don't want our kick-off analysis to get bogged down like this.
@@ -222,9 +215,11 @@ This is a frustrating situation: two out-of-the-box solutions to modelling our d
 
 Luckily, `keanu` offers a better route, by letting us define a custom modelling function like `lm` within seconds.
 
-So far, it seems like a lognormal model could describe our data pretty well, but we need to model not only the mean of the data, but also the variance. 
+Above, we pinned our issue on a conflict between the mean and median. This conflict was due to the fact that, as session-length increases, the median goes down, but the variance goes up. So we just need a model that not only captures the central-tendency of the data, but also its variance.
 
-First, we write out the likelihood function that describes our data. R provides the density for the lognormal distribution, we'll just wrap it in a function so that it gives us the log-density by default:
+First, we write out the likelihood function that describes (the error in) our data. The lognormal distribution seems like a good choice, since our data was very close to normally distributed when we log-transformed it.
+
+R provides the density for the lognormal distribution, we'll just wrap it in a function so that it gives us the log-density by default:
 
 ```{r Lognormal Model 1, include=TRUE, echo=TRUE}
 lognormal_loglik_fun <- function(Y, mu, sigma) dlnorm(x = Y, meanlog = mu, sdlog = sigma, log = TRUE)
@@ -236,9 +231,9 @@ Next, we just pass this to keanu's `modeller_from_loglik`. This is a "function f
 lognormal_model <- modeller_from_loglik(loglik_fun = lognormal_loglik_fun)
 ```
 
-In this case, the function is `lognormal_model`. It acts a lot like other modelling functions in R, like `lm`. The biggest difference is that we pass it a list of formulas, instead of a single formula. And instead of just specifying the DV in our formulas, we also specify the parameter of the DV that's being modelled by that formula.
+In this case, the function produced is `lognormal_model`. It acts a lot like other modelling functions in R, like `lm`. The biggest difference is that we pass it a list of formulas, instead of a single formula. And instead of just specifying the DV in our formulas, we also specify the parameter of the DV that's being modelled by that formula.
 
-For example, to model the `mu` parameter of our `checkout_amount_v2` using just `session_length`, we'd right:
+For example, to model the `mu` parameter of our `checkout_amount_v2` using just `session_length`, we'd write:
 
 ```{r Lognormal Model 4, include=TRUE, echo=TRUE, eval=FALSE}
 mu(checkout_amount_v2) ~ session_length
@@ -253,7 +248,7 @@ sigma(checkout_amount_v2, link = "log") ~ session_length
 Now let's put it all together, using all predictors:
 
 ```{r Lognormal Model 6, include=TRUE, echo=TRUE}
-fit3 <- lognormal_model(
+keanu_model <- lognormal_model(
   
   formulas =  list( mu(checkout_amount_v2) ~ .,
                     sigma(checkout_amount_v2, link='log') ~ . ),
@@ -263,29 +258,33 @@ fit3 <- lognormal_model(
 )
 ```
 
-And... that's it! Looking at the coefficients (for now, focusing on the interesting ones to avoid clutter), we see that the model has exactly captured the paradox above. Session-length has a negative coefficient when predicting the `mu` parameter, but a very large *positive* coefficient when predicting the `sigma` parameter:
+And... that's it! Looking at the coefficients (I've removed all but the interesting ones to avoid clutter), we see that the model has exactly captured the paradox above. Session-length has a negative coefficient when predicting the `mu` parameter, but a very large *positive* coefficient when predicting the `sigma` parameter:
 
-```{r, include=TRUE}
-plot_coefficients(fit3, terms = vars(starts_with("time_of_day"), session_length)) +
+```{r Lognormal Model Coef-Plot, include=TRUE}
+plot_coefficients(keanu_model, terms = vars(starts_with("time_of_day"), session_length), 
+                  facet=FALSE,
+                  size=1, color="steelblue3") +
   theme_strong(rotate_xlab=TRUE) +
   scale_y_continuous("Estimate") +
-  scale_x_discrete("Term") +
-  ggtitle("Lognormal Model — Coefficients")
+  scale_x_discrete("Predictor") +
+  coord_flip() +
+  facet_wrap(~parameter, scales="free_x") +
+  scale_shape_discrete(guide=FALSE)
 ```
 
 Since the `mu` parameter of the lognormal distribution corresponds to the median, this explains why the median decreased. Meanwhile, the mean (expected value) of this distribution is given by $exp(\mu + \frac{\sigma^2}{2})$. When we plug our coefficients into this, we can see that model correctly captures that the expected-value goes up with longer sessions:
 
-(TODO)
-
-```{r}
-univariate_predictions(fit3)$session_length %>%
+```{r Lognormal Model Expected-Val, include=TRUE}
+univariate_predictions(keanu_model)$session_length %>%
   distinct() %>%
   mutate(expected_value = exp(.fitted_mu + .fitted_sigma^2/2)) %>%
   ggplot(aes(x=session_length, y=expected_value)) +
-  geom_line()
+  geom_line(size=2, color=color_scale_discrete_strong[1]) +
+  theme_strong() +
+  scale_x_continuous("Session-Length", breaks=1:5) +
+  scale_y_continuous("Expected Value of Checkout Amount", breaks = 10:15, labels = scales::dollar)
 ```
 
-(Aside from giving more accurate predictions, this can potentially give us insight)
+The example here showcases the virtues of `keanu` nicely. We've not only done a better job at building a model that fits our data, but this model also provides more insight than our initial attempts: its coefficient-estimates perfectly capture the paradoxical relationship between session-length and checkout-amount.
 
-
-
+So to recap: `keanu` gives us an fast and easy way of defining modelling functions — all we need to do is provide the likelihood function for our data. These functions let us do quick analyses of data that don't fit into the mold of out-of-the-box modelling tools in R. 
