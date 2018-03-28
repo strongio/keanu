@@ -1,6 +1,4 @@
-
 # Keanu Model Factory -------------------------------------------------------------------------
-
 
 #' Create your own modelling function, given a log-likelihood function.
 #'
