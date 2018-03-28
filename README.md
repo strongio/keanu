@@ -25,3 +25,5 @@ Estimate the parameters of your model with your new interface!
 	                    sigma(outcome, link='log') ~ . ),
 	  data = df[c('outcome', predictors)]
 	)
+
+`keanu` assumes that all but the first argument in your log-likelihood function are model parameters. These parameters are modelled via the formulas passed to your model interface, for example, mapping `mu(x)` to the `mu` argument in your log-likelihood function.
