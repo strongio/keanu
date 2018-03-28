@@ -18,7 +18,9 @@ Depends:
 Imports:
   dplyr (>= 0.7.2),
   purrr (>= 0.2.3),
-  tidyr (>= 0.6.3)
+  tidyr (>= 0.6.3),
+  pryr (>= 0.1.4),
+  tibble (>= 1.4.2)
 RoxygenNote: 6.0.1
 Suggests: knitr,
     rmarkdown

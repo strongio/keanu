@@ -27,7 +27,7 @@ library('stringr')
 library('broom')
 library('keanu')
 #devtools::install_github("thomasp85/patchwork")
-library(patchwork)
+library('patchwork')
 
 color_scale_discrete_strong <- c("#00CBFE","#2B4141","#8AB9B5","#C8C2AE")
 theme_strong <- function (rotate_xlab=FALSE)  {
@@ -187,7 +187,7 @@ p_session_checkout +
 
 Once we've re-scaled the values like this, it looks like longer sessions mean smaller purchases (just like the log-transformed model said)!
 
-What is happening here is a conflict between the mean and the median. As session-length goes down, the median checkout-amount goes down. But the variance increases, and checkout amounts are always positive, so this has an assymetric effect: while the median goes down, the mean goes up.
+What is happening here is a conflict between the mean and the median. As session-length goes down, the median checkout-amount goes down. But the variance increases, and checkout amounts are always positive, so this has an asymmetric effect: while the median goes down, the mean goes up.
 
 ```{r Homeoskedacity, eval=FALSE}
 # bonus: the problem is we are violating the homeoskedacity

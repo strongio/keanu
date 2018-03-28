@@ -14,6 +14,8 @@
 #'
 #' @docType package
 #' @name keanu
+NULL
+#> NULL
 
 #' Parse a character into an expression
 #'
