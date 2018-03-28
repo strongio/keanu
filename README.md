@@ -1,6 +1,6 @@
 # keanu
 
-A package for easier custom model fitting in R.
+A package for building custom model interfaces in R. _Enter the model.matrix_.
 
 For a complete introduction, read [our blog post](https://www.strong.io/blog/keanu-enter-the-model-matrix).
 
